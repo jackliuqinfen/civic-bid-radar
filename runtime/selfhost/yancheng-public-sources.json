@@ -1,0 +1,435 @@
+{
+  "profiles": {
+    "usr_yc_tinghu": {
+      "requireTenderCue": true,
+      "hanwebRecordsOnly": true
+    },
+    "usr_yc_dafeng": {
+      "requireTenderCue": true,
+      "hanwebRecordsOnly": true
+    },
+    "usr_yc_dongtai": {
+      "requireTenderCue": true,
+      "hanwebRecordsOnly": true
+    },
+    "usr_yc_sheyang": {
+      "requireTenderCue": true,
+      "hanwebRecordsOnly": true
+    },
+    "usr_yc_binhai": {
+      "requireTenderCue": true,
+      "summaryOnly": true
+    },
+    "usr_yc_xiangshui": {
+      "requireTenderCue": true,
+      "summaryOnly": true
+    },
+    "usr_yc_xs_sg": {
+      "requireTenderCue": true,
+      "hanwebRecordsOnly": true
+    },
+    "usr_584d6e12": {
+      "region": "盐城市盐都区"
+    }
+  },
+  "sources": [
+    {
+      "key": "yc_pub_yandu_tender",
+      "name": "盐都区政府 · 工程招标公告",
+      "url": "https://www.yandu.gov.cn/col/col23720/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "工程建设",
+      "region": "盐城市盐都区",
+      "sample": "https://www.yandu.gov.cn/art/2026/11/19/art_23720_4469436.html"
+    },
+    {
+      "key": "yc_pub_yandu_result",
+      "name": "盐都区政府 · 工程中标公告",
+      "url": "https://www.yandu.gov.cn/col/col23723/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "工程建设",
+      "region": "盐城市盐都区",
+      "defaultStage": "result",
+      "sample": "https://www.yandu.gov.cn/art/2026/11/25/art_23723_4470871.html"
+    },
+    {
+      "key": "yc_pub_jianhu_engineering",
+      "name": "建湖县政府 · 工程招投标",
+      "url": "https://www.jianhu.gov.cn/col/col32135/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "工程建设",
+      "region": "盐城市建湖县",
+      "hanwebRecordsOnly": true,
+      "sample": "https://www.jianhu.gov.cn/art/2026/10/12/art_32135_4460067.html"
+    },
+    {
+      "key": "yc_pub_jianhu_purchase",
+      "name": "建湖县政府 · 政府采购",
+      "url": "https://www.jianhu.gov.cn/col/col32136/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "region": "盐城市建湖县",
+      "hanwebRecordsOnly": true,
+      "sample": "https://www.jianhu.gov.cn/art/2026/10/13/art_32136_4460425.html"
+    },
+    {
+      "key": "yc_pub_dongtai_medical",
+      "name": "东台市政府 · 医疗器械招标",
+      "url": "https://www.dongtai.gov.cn/col/col7994/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "医疗采购",
+      "region": "盐城市东台市",
+      "hanwebRecordsOnly": true,
+      "excludeTitle": "^关于投标文件递交相关事项的提醒公告$",
+      "sample": "https://www.dongtai.gov.cn/art/2026/11/24/art_7994_4470516.html"
+    },
+    {
+      "key": "yc_pub_yannan",
+      "name": "盐南高新区管委会 · 招采相关公告",
+      "url": "https://cnxq.yancheng.gov.cn/col/col21803/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "其他交易",
+      "region": "盐城市盐南高新区",
+      "hanwebRecordsOnly": true,
+      "requireTenderCue": true,
+      "excludeTitle": "征求意见|拟定|拟认定|任前|招聘|管理办法|政策",
+      "sample": "https://cnxq.yancheng.gov.cn/art/2026/9/9/art_21803_4452800.html"
+    },
+    {
+      "key": "yc_pub_czj_24544",
+      "name": "盐城市财政局 · 市级采购意向",
+      "url": "https://czj.yancheng.gov.cn/col/col24544/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "intent",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/24/art_24544_31856.html"
+    },
+    {
+      "key": "yc_pub_czj_24546",
+      "name": "盐城市财政局 · 市级单一来源公示",
+      "url": "https://czj.yancheng.gov.cn/col/col24546/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "intent",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/6/3/art_24546_20776.html"
+    },
+    {
+      "key": "yc_pub_czj_31689",
+      "name": "盐城市财政局 · 市级资格预审和招标公告",
+      "url": "https://czj.yancheng.gov.cn/col/col31689/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_20139_35099.html"
+    },
+    {
+      "key": "yc_pub_czj_20141",
+      "name": "盐城市财政局 · 市级竞争性谈判公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20141/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/9/28/art_20141_21921.html"
+    },
+    {
+      "key": "yc_pub_czj_20142",
+      "name": "盐城市财政局 · 市级竞争性磋商公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20142/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/24/art_20142_24649.html"
+    },
+    {
+      "key": "yc_pub_czj_20144",
+      "name": "盐城市财政局 · 市级询价公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20144/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/10/28/art_20144_22090.html"
+    },
+    {
+      "key": "yc_pub_czj_31690",
+      "name": "盐城市财政局 · 市级中标（成交）公告",
+      "url": "https://czj.yancheng.gov.cn/col/col31690/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "result",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/24/art_20145_34637.html"
+    },
+    {
+      "key": "yc_pub_czj_20147",
+      "name": "盐城市财政局 · 市级终止公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20147/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "terminated",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/23/art_20147_23458.html"
+    },
+    {
+      "key": "yc_pub_czj_20148",
+      "name": "盐城市财政局 · 市级更正公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20148/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "amendment",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/24/art_20148_25622.html"
+    },
+    {
+      "key": "yc_pub_czj_20149",
+      "name": "盐城市财政局 · 市级其他公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20149/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "other",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/1/23/art_20149_20602.html"
+    },
+    {
+      "key": "yc_pub_czj_33996",
+      "name": "盐城市财政局 · 市级征集公告",
+      "url": "https://czj.yancheng.gov.cn/col/col33996/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/24/art_33996_20171.html"
+    },
+    {
+      "key": "yc_pub_czj_33995",
+      "name": "盐城市财政局 · 市级入围公告",
+      "url": "https://czj.yancheng.gov.cn/col/col33995/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "result",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/4/art_33995_20101.html"
+    },
+    {
+      "key": "yc_pub_czj_20137",
+      "name": "盐城市财政局 · 市级合同公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20137/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "contract",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_20137_35849.html"
+    },
+    {
+      "key": "yc_pub_czj_24547",
+      "name": "盐城市财政局 · 县（市、区）采购意向",
+      "url": "https://czj.yancheng.gov.cn/col/col24547/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "intent",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_24547_31858.html"
+    },
+    {
+      "key": "yc_pub_czj_24549",
+      "name": "盐城市财政局 · 县（市、区）单一来源公示",
+      "url": "https://czj.yancheng.gov.cn/col/col24549/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "intent",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/19/art_24549_20787.html"
+    },
+    {
+      "key": "yc_pub_czj_31691",
+      "name": "盐城市财政局 · 县（市、区）资格预审和招标公告",
+      "url": "https://czj.yancheng.gov.cn/col/col31691/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_20174_35097.html"
+    },
+    {
+      "key": "yc_pub_czj_20176",
+      "name": "盐城市财政局 · 县（市、区）竞争性谈判公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20176/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/10/10/art_20176_21922.html"
+    },
+    {
+      "key": "yc_pub_czj_20177",
+      "name": "盐城市财政局 · 县（市、区）竞争性磋商公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20177/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/24/art_20177_24650.html"
+    },
+    {
+      "key": "yc_pub_czj_20179",
+      "name": "盐城市财政局 · 县（市、区）询价公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20179/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/9/17/art_20179_22089.html"
+    },
+    {
+      "key": "yc_pub_czj_31692",
+      "name": "盐城市财政局 · 县（市、区）中标（成交）公告",
+      "url": "https://czj.yancheng.gov.cn/col/col31692/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "result",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_20180_34645.html"
+    },
+    {
+      "key": "yc_pub_czj_20182",
+      "name": "盐城市财政局 · 县（市、区）终止公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20182/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "terminated",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_20182_23461.html"
+    },
+    {
+      "key": "yc_pub_czj_20183",
+      "name": "盐城市财政局 · 县（市、区）更正公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20183/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "amendment",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_20183_25625.html"
+    },
+    {
+      "key": "yc_pub_czj_20184",
+      "name": "盐城市财政局 · 县（市、区）其他公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20184/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "other",
+      "sample": "https://czj.yancheng.gov.cn/art/2024/11/14/art_20184_10567.html"
+    },
+    {
+      "key": "yc_pub_czj_33999",
+      "name": "盐城市财政局 · 县（市、区）征集公告",
+      "url": "https://czj.yancheng.gov.cn/col/col33999/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "tender",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/24/art_33999_20170.html"
+    },
+    {
+      "key": "yc_pub_czj_33998",
+      "name": "盐城市财政局 · 县（市、区）入围公告",
+      "url": "https://czj.yancheng.gov.cn/col/col33998/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "result",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/13/art_33998_20103.html"
+    },
+    {
+      "key": "yc_pub_czj_20185",
+      "name": "盐城市财政局 · 县（市、区）合同公告",
+      "url": "https://czj.yancheng.gov.cn/col/col20185/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "contract",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_20185_35848.html"
+    },
+    {
+      "key": "yc_pub_czj_34066",
+      "name": "盐城市财政局 · 驻盐单位采购",
+      "url": "https://czj.yancheng.gov.cn/col/col34066/index.html",
+      "articlePattern": "^/art/20\\d{2}/\\d{1,2}/\\d{1,2}/art_\\d+_\\d+\\.html$",
+      "tradeType": "政府采购",
+      "hanwebRecordsOnly": true,
+      "defaultStage": "other",
+      "sample": "https://czj.yancheng.gov.cn/art/2026/11/25/art_34066_4470856.html"
+    },
+    {
+      "key": "yc_pub_ycit_tender",
+      "name": "盐城工学院招投标办公室 · 招标信息",
+      "url": "https://zbxx.ycit.edu.cn/zbxx.htm",
+      "articlePattern": "^/info/1003/\\d+\\.htm$",
+      "contentSelector": ".v_news_content",
+      "tradeType": "高校采购",
+      "sample": "https://zbxx.ycit.edu.cn/info/1003/24611.htm"
+    },
+    {
+      "key": "yc_pub_ycit_result",
+      "name": "盐城工学院招投标办公室 · 结果公示",
+      "url": "https://zbxx.ycit.edu.cn/jggs.htm",
+      "articlePattern": "^/info/1006/\\d+\\.htm$",
+      "contentSelector": ".v_news_content",
+      "tradeType": "高校采购",
+      "defaultStage": "result",
+      "sample": "https://zbxx.ycit.edu.cn/info/1006/24661.htm"
+    },
+    {
+      "key": "yc_pub_ycit_assets",
+      "name": "盐城工学院国有资产管理处 · 采购公告",
+      "url": "https://gzc.ycit.edu.cn/xxgk/cggg.htm",
+      "articlePattern": "^/info/1241/\\d+\\.htm$",
+      "contentSelector": ".v_news_content",
+      "tradeType": "高校采购",
+      "sample": "https://gzc.ycit.edu.cn/info/1241/3192.htm"
+    },
+    {
+      "key": "yc_pub_yctu_tender",
+      "name": "盐城师范学院招投标管理办公室 · 采购公告",
+      "url": "https://sbc.yctu.edu.cn/zbgg/list.htm",
+      "articlePattern": "^/20\\d{2}/\\d{4}/c872a\\d+/page\\.htm$",
+      "contentSelector": ".wp_articlecontent",
+      "tradeType": "高校采购",
+      "sample": "https://sbc.yctu.edu.cn/2026/1118/c872a162985/page.htm"
+    },
+    {
+      "key": "yc_pub_yctu_result",
+      "name": "盐城师范学院招投标管理办公室 · 结果公告",
+      "url": "https://sbc.yctu.edu.cn/zsgs/list.htm",
+      "articlePattern": "^/20\\d{2}/\\d{4}/c873a\\d+/page\\.htm$",
+      "contentSelector": ".wp_articlecontent",
+      "tradeType": "高校采购",
+      "defaultStage": "result",
+      "sample": "https://sbc.yctu.edu.cn/2026/1124/c873a164283/page.htm"
+    },
+    {
+      "key": "yc_pub_yctu_logistics_result",
+      "name": "盐城师范学院后勤保障集团 · 中标公告",
+      "url": "https://hqjt.yctu.edu.cn/5972/list.htm",
+      "articlePattern": "^/20\\d{2}/\\d{4}/c5972a\\d+/page\\.htm$",
+      "contentSelector": ".wp_articlecontent",
+      "tradeType": "高校采购",
+      "defaultStage": "result",
+      "sample": "https://hqjt.yctu.edu.cn/2026/1020/c5972a155558/page.htm"
+    },
+    {
+      "key": "yc_pub_ycsyy",
+      "name": "盐城市第一人民医院 · 招标公告",
+      "url": "https://www.ycsyy.com/html/859/",
+      "articlePattern": "^/html/859/20\\d{2}-\\d{2}-\\d{2}/content-\\d+\\.html$",
+      "contentSelector": ".article",
+      "tradeType": "医疗采购",
+      "sample": "https://www.ycsyy.com/html/859/2026-11-25/content-5102.html"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@civic-bid-radar/selfhost",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "better-auth": "1.7.27"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test *.test.mjs"
+  },
+  "version": "0.0.0"
+}
