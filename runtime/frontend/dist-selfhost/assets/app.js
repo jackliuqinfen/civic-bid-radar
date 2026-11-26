@@ -44,6 +44,29 @@ function applyTheme() {
 }
 applyTheme();
 
+const snapshotElements = new Set(["article","section","div","p","br","hr","h1","h2","h3","h4","strong","b","em","i",
+  "blockquote","ul","ol","li","table","caption","thead","tbody","tfoot","tr","td","th","span"]);
+const omittedSnapshotElements = new Set(["script","style","iframe","object","embed","form","svg","math","template","noscript"]);
+function renderOfficialSnapshot(target, caption, html) {
+  const source = document.createElement("template");
+  source.innerHTML = html;
+  const info = document.createElement("div");
+  info.className = "muted";
+  info.textContent = caption;
+  const paper = document.createElement("div");
+  paper.className = "official-doc-paper";
+  const append = (node, parent, depth) => {
+    if (depth > 40) return;
+    if (node.nodeType === Node.TEXT_NODE) { parent.append(node.textContent); return; }
+    if (node.nodeType !== Node.ELEMENT_NODE || omittedSnapshotElements.has(node.localName)) return;
+    const next = snapshotElements.has(node.localName) ? document.createElement(node.localName) : parent;
+    if (next !== parent) parent.append(next);
+    for (const child of node.childNodes) append(child, next, depth + 1);
+  };
+  for (const child of source.content.childNodes) append(child, paper, 0);
+  target.replaceChildren(info, paper);
+}
+
 function esc(v) {
   return String(v ?? "")
     .replaceAll("&", "&amp;")
@@ -1663,7 +1686,7 @@ async function renderOpportunities(root) {
     const pendingIds = (result.proofs || []).flatMap((p) => p.pendingDocIds || []).filter(Boolean);
     return `<div class="meta-row" style="margin-top:4px;">
       ${badge(toneMap[result.status] || "quiet", result.status === "supported" ? "check" : result.status === "non_conform" ? "x" : "info", labels[result.status] || "待核")}
-      ${result.aiExtracted ? `<span class="prov prov-auto">AI 已精炼</span>` : ""}
+      ${result.aiExtracted ? `<span class="prov prov-auto">AI 解读已生成</span>` : ""}
       ${companyDocs ? `<span style="font-size:12px;">${esc(companyDocs)}</span>` : ""}
       ${(result.aiSummary || proof?.reason) ? `<span class="muted" style="font-size:12px;">${esc(result.aiSummary || proof.reason)}</span>` : ""}
       ${pendingIds.length && flt.matchCompanyId ? `<button type="button" class="quick-pill" style="color:var(--accent);border-color:rgba(0,82,217,0.35);font-weight:600;" data-ai-verify-co="${esc(flt.matchCompanyId)}" data-ai-verify-doc="${esc(pendingIds[0])}">AI 识图核验该证</button>` : ""}
@@ -2730,7 +2753,7 @@ async function openOpportunityPeekDrawer(id, triggerEl) {
           try {
             const res = await api(`/opportunities/${id}/official-snapshot`);
             if (res.ok && res.html) {
-              host.innerHTML = `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">来源：${esc(res.sourceUrl)} · 快照时间：${esc(res.fetchedAt || "")}</div><div class="official-doc-paper">${res.html}</div>`;
+              renderOfficialSnapshot(host, `来源 ${res.sourceUrl} · 快照时间 ${res.fetchedAt || ""}`, res.html);
             } else {
               host.innerHTML = `<div class="notice-box warn">${esc(res.message || "暂无法抓取官方网页快照。")}</div>`;
             }
@@ -3005,7 +3028,7 @@ async function renderDetail(root, id, isProjectView = false) {
             </div>
 
             <div class="metric-box ${d.qualifications?.length || d.qualTags?.length || d.evidence?.aiExtract?.summary ? "" : "muted-box"}">
-              <div class="metric-head"><span>准入条件</span>${d.evidence?.aiExtract?.summary ? `<span class="prov prov-auto">AI 精炼</span>` : ""}</div>
+              <div class="metric-head"><span>准入条件</span>${d.evidence?.aiExtract?.summary ? `<span class="prov prov-auto">AI 解读</span>` : ""}</div>
               <div class="${d.evidence?.aiExtract?.summary ? "" : "muted"}" style="${d.evidence?.aiExtract?.summary ? "font-size:12.5px;font-weight:500;" : ""}">${esc(d.evidence?.aiExtract?.summary || (d.evidence?.requirements?.find(req => req.state === "conflict") ? "发现版本冲突，须核对原文" : d.evidence?.requirements?.find(req => req.state === "stated")?.entries[0]?.excerpt || "可读原文未写明，待核对招标文件"))}</div>
               <a href="/matrix?noticeId=${esc(id)}" data-go="/matrix?noticeId=${esc(id)}">按公司比对</a>
             </div>
@@ -4326,7 +4349,7 @@ async function renderDetail(root, id, isProjectView = false) {
       try {
         const res = await api(`/opportunities/${id}/official-snapshot`);
         if (res.ok && res.html) {
-          host.innerHTML = `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">官方网页快照 · 来源：${esc(res.sourceUrl)}</div><div class="official-doc-paper">${res.html}</div>`;
+          renderOfficialSnapshot(host, `官方网页快照 · 来源 ${res.sourceUrl}`, res.html);
           btn.textContent = "✓ 已加载官方原排版快照";
         } else {
           showToast(res.message || "暂无法抓取官方网页快照。");

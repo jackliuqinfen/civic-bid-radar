@@ -51,8 +51,6 @@ const qualification = new RegExp(
 const gradeRank = { 特级: 0, 一级: 1, 壹级: 1, 二级: 2, 贰级: 2, 三级: 3, 叁级: 3, 甲级: 1, 乙级: 2, 丙级: 3, 不分等级: 3 };
 const scopeNumber = { 一: "1", 二: "2", 两: "2", 三: "3", 四: "4", 五: "5", 六: "6", 七: "7", 八: "8", 九: "9", 十: "10" };
 
-// Clauses that are standard payment/evaluation/anti-fraud boilerplate and should NEVER block qualification matching
-const BOILERPLATE_NON_ACCESS_RE = /(?:评标基准价|算术平均值|去掉其中的|得分|投标文件的所有内容必须真实|弄虚作假|挂靠|转包|非法分包|发票|审计结论|工程竣工验收|无利息补偿|进度付款|开标前由投标人代表随机抽取|不见面开标大厅|五、投标保证金|履约保证金|7天内必须进场|公告发布及获取招标文件|招标人保留对上述招标范围)/;
 
 export function sameNoticeScope(a, b) {
   const scope = notice => {
@@ -91,7 +89,7 @@ function qualificationItems(text) {
     return {
       key,
       grade: postGrade || preGrade || "",
-      higherAccepted: Boolean(postHigher || preHigher) || /及以上|以上|（含）以上/.test(text),
+      higherAccepted: Boolean(postHigher || preHigher),
     };
   }).filter(x => x.key && x.key.length >= 4);
 }
@@ -177,18 +175,17 @@ function normalizeValue(value) {
 }
 
 function clauseStance(key, text) {
+  if (/(?:除.{2,28}外|但.{2,45}(?:可|免|不受|除外)|例外|在.{2,25}条件下(?:可|允许))/.test(text)) return "exception";
   if (key === "REQ_JOINT") {
     if (/(?:不接受|不得采用|禁止|不允许).{0,8}联合体/.test(text)) return "prohibited";
     if (/(?:接受|允许|可以采用).{0,8}联合体/.test(text)) return "allowed";
   }
-  if (/(?:除.{2,28}外|但.{2,45}(?:可|免|不受|除外)|例外|在.{2,25}条件下(?:可|允许))/.test(text)) return "exception";
   if (key === "REQ_PERFORMANCE" && /不要求(?:类似)?业绩|无(?:类似)?业绩要求|不设(?:类似)?业绩|业绩不作为资格条件/.test(text)) return "exempt";
-  if (key === "REQ_SME" && /(?:是否专门面向中小企业预留[：:\s]*[□☐]?\s*是\s*[■☑]\s*否|非专门面向中小企业|面向中小企业预留[：:\s]*[□☐]?\s*否)/.test(text)) return "exempt";
   if (/不得|禁止|拒绝|不接受/.test(text)) return "prohibited";
   return "mandatory";
 }
 
-export function extractNoticeEvidence({ body, bodyComplete, url, attachments = [], attachmentsKnown = true, documents = [], aiExtract = null, qualTags = "" } = {}) {
+export function extractNoticeEvidence({ body, bodyComplete, url, attachments = [], attachmentsKnown = true, documents = [], aiExtract = null } = {}) {
   const sources = [{ label: "公告正文", kind: "notice", url, body }, ...documents];
   const completeness = {
     body: Boolean(String(body || "").trim()) && bodyComplete !== false,
@@ -223,11 +220,11 @@ export function extractNoticeEvidence({ body, bodyComplete, url, attachments = [
           requirements[ruleIndex].entries.push({ ...cite, stance: clauseStance(rule.key, line) });
           recognized = true;
         }
-        // Only record genuine admission restrictions in REQ_OTHER — ignore payment/eval/anti-fraud boilerplate
-        if (!recognized && section === "eligibility" && line.length >= 12 &&
-            !BOILERPLATE_NON_ACCESS_RE.test(line) &&
-            !Object.values(fields).some(field => field.pattern.test(line)) &&
-            /(?:仅限|注册地|本地|备案证明|近[一二三四五12345]年.*(?:销售额|审计|业绩)|特定专利|ISO)/.test(line)) {
+        const containsCondition = /(?:投标人|供应商|申请人|响应人).{0,14}(?:应|须|限于|不得)|并(?:且|须|应|具备|具有|配备|满足|提交|提供)|(?:近|过去)[一二三四五12345]年|不得|仅限/.test(line);
+        const unrecognizedAdditional = line.split(/[，,；;]/).some(part => /(?:并|还|同时)?(?:需|须|应|不得|近[一二三四五12345]年|配备|限制)/.test(part) &&
+          !requirementDefinitions.some(definition => definition.pattern.test(part)) && !/^(?:投标人|供应商|申请人)?[须应]?满足以下(?:条款|条件)[：:]?$/.test(part.trim()));
+        if ((!recognized && (containsCondition || (section === "eligibility" && line.length >= 12 && !Object.values(fields).some(field => field.pattern.test(line))))) ||
+            (recognized && unrecognizedAdditional)) {
           const other = requirements.at(-1).entries;
           if (other.at(-1)?.excerpt !== excerpt) other.push({ ...cite, stance: clauseStance("REQ_OTHER", line) });
         }
@@ -260,17 +257,6 @@ export function extractNoticeEvidence({ body, bodyComplete, url, attachments = [
       (stances.has("allowed") && stances.has("prohibited")) || (stances.has("exempt") && stances.has("mandatory"));
     req.state = disagree ? "conflict" : "stated";
     req.stance = stances.size === 1 ? req.entries[0].stance : "mixed";
-  }
-
-  // Fallback: if body regex missed REQ_CORP_QUAL (or body uncaptured) but qualTags has explicit specs, inject tag reference when aiExtract not present
-  const corpReq = requirements.find(r => r.key === "REQ_CORP_QUAL");
-  if (corpReq && (corpReq.state === "not_stated" || corpReq.state === "unavailable") && !aiExtract && qualTags) {
-    const tagItems = qualificationItems(String(qualTags));
-    if (tagItems.length) {
-      corpReq.state = "stated";
-      corpReq.stance = "mandatory";
-      corpReq.entries.push({ source: "公告标签提炼", kind: "notice", excerpt: String(qualTags).replace(/[\[\]"]/g, "").split(/[,，]/).map(s => s.trim()).filter(Boolean).join("、"), stance: "mandatory" });
-    }
   }
 
   return { requirements, fields: extractedFields, scoring, attachments, completeness, aiExtract: aiExtract || null };
@@ -332,165 +318,31 @@ export function qualificationSearchTerms(docs = []) {
   return [...terms];
 }
 
-function personnelMatchesRequirement(pmReq, personnel = []) {
-  if (!pmReq?.required) return { ok: true, reason: "未提项目负责人门槛" };
-  const active = personnel.filter(p => p.status !== "void" && p.lock_status === "available");
-  if (!active.length) return { ok: false, missingDesc: `${pmReq.specialties?.join("/") || "相关专业"}${pmReq.minGrade || ""}建造师` };
-  const specs = pmReq.specialties || [];
-  const needRank = gradeRank[pmReq.minGrade] ?? 9;
-  const hit = active.find(p => {
-    const certText = `${p.role_title || ""} ${p.cert_level || ""}`;
-    if (specs.length && !specs.some(sp => certText.includes(sp.replace(/工程$/, "")))) return false;
-    const pGrade = /一级/.test(certText) ? 1 : /二级/.test(certText) ? 2 : 9;
-    return pGrade <= needRank;
-  });
-  if (hit) return { ok: true, person: hit, reason: `人员库已配可用：${hit.name}（${hit.cert_level || hit.role_title}）` };
-  return { ok: false, missingDesc: `${pmReq.specialties?.join("/") || ""}${pmReq.minGrade || ""}建造师` };
-}
-
-export function evaluateNoticeRequirements(evidence, docs = [], date = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10), personnel = []) {
+export function evaluateNoticeRequirements(evidence, docs = [], date = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)) {
   const bidDate = evidence.fields.deadline.state === "stated" && normalizeValue(evidence.fields.deadline.entries[0].value).slice(0, 10);
-  const operationalDay = evidence.operationalDeadline && evidence.operationalDeadline !== "0" ? new Date(Number(BigInt(evidence.operationalDeadline) / 1000000n) + 8 * 3600000).toISOString().slice(0, 10) : "";
+  const operationalDay = evidence.operationalDeadline && evidence.operationalDeadline !== "0" ? new Date(Number(BigInt(evidence.operationalDeadline)/1000000n)+8*3600000).toISOString().slice(0,10) : "";
   const requiredThrough = operationalDay || bidDate;
   const holdings = companyEvidence(docs, requiredThrough > date ? requiredThrough : date);
-  const hasUsableBizLicense = holdings.some(doc => doc.usable && (/营业执照/.test(doc.category) || /营业执照/.test(doc.label)));
-  const hasAnyBizLicense = holdings.some(doc => /营业执照/.test(doc.category) || /营业执照/.test(doc.label));
-  const ai = evidence.aiExtract || null;
-
   const requirements = evidence.requirements.map(requirement => {
     const pending = (reason, documents = []) => ({ key: requirement.key, status: "pending", reason, documents });
-
-    // AI Extract overrides for complex natural-language requirements when available
-    if (ai) {
-      if (requirement.key === "REQ_CORP_QUAL" && Array.isArray(ai.qualGroups) && ai.qualGroups.length) {
-        const candidates = [];
-        const relatedPending = [];
-        let allGroupsPass = true;
-        for (const group of ai.qualGroups) {
-          const parsedSpecs = (group.specs || []).flatMap(sp => qualificationItems(sp.name).map(q => ({ ...q, higherAccepted: sp.higherAccepted !== false })));
-          if (!parsedSpecs.length) { allGroupsPass = false; continue; }
-          const groupMatches = parsedSpecs.map(reqItem => holdings.filter(doc => doc.usable && doc.qualifications.some(spec => qualificationMatches(reqItem, spec))));
-          candidates.push(...groupMatches.flat());
-          const groupOk = group.logic === "AND" ? groupMatches.every(m => m.length > 0) : groupMatches.some(m => m.length > 0);
-          if (!groupOk) {
-            allGroupsPass = false;
-            const rel = holdings.filter(doc => doc.qualifications.some(spec => parsedSpecs.some(item => item.key === spec.key)));
-            relatedPending.push(...rel);
-          }
-        }
-        const uniqMatched = [...new Set(candidates)];
-        const uniqRelated = [...new Set(relatedPending)];
-        if (allGroupsPass && uniqMatched.length) {
-          return { key: requirement.key, status: "conform", reason: `AI条款匹配：${uniqMatched.map(d => d.label).slice(0, 2).join("、")}`, documents: uniqMatched };
-        }
-        if (uniqRelated.length) {
-          const res = pending("已有对应专业证照，档案待AI核验或有效期待核", uniqRelated);
-          Object.defineProperties(res, { matchedDocuments: { value: uniqMatched }, relatedDocuments: { value: uniqRelated } });
-          return res;
-        }
-        return { key: requirement.key, status: "missing", reason: `AI提炼要求：${ai.qualGroups.map(g => g.specs.map(s => s.name).join(g.logic === "AND" ? " 且 " : " 或 ")).join("；")}`, documents: [] };
-      }
-      if (requirement.key === "REQ_SAFETY_LIC") {
-        if (!ai.requiresSafetyLicense) return { key: requirement.key, status: "na", reason: "公告未强制要求安许证", documents: [] };
-        const candidates = holdings.filter(doc => /安全生产许可证|安许证/.test(`${doc.category} ${doc.label}`));
-        if (candidates.some(doc => doc.usable)) return { key: requirement.key, status: "conform", reason: "有效安全生产许可证已核验", documents: candidates.filter(doc => doc.usable) };
-        return candidates.length ? pending("安全许可证待核验或临期", candidates) : { key: requirement.key, status: "missing", reason: "档案缺安全生产许可证", documents: [] };
-      }
-      if (requirement.key === "REQ_JOINT") {
-        if (ai.consortiumPolicy === "not_allowed") return { key: requirement.key, status: "na", reason: "不接受联合体，独立主体参投即可", documents: [] };
-        if (ai.consortiumPolicy === "allowed") return { key: requirement.key, status: "na", reason: "允许联合体（独立参投时无需协议）", documents: [] };
-      }
-      if (requirement.key === "REQ_PM_CERT") {
-        if (!ai.pmRequirement?.required) return { key: requirement.key, status: "na", reason: "未设项目负责人硬性门槛", documents: [] };
-        const pmCheck = personnelMatchesRequirement(ai.pmRequirement, personnel);
-        if (pmCheck.ok) return { key: requirement.key, status: "conform", reason: pmCheck.reason, documents: [] };
-        return pending(`待配人员：${pmCheck.missingDesc}`);
-      }
-      if (requirement.key === "REQ_PERFORMANCE") {
-        if (!ai.performanceReq?.required) return { key: requirement.key, status: "na", reason: "不作为实质性资格门槛", documents: [] };
-        return pending(`须核对类似业绩：${ai.performanceReq.summary || "见公告原文"}`);
-      }
-      if (requirement.key === "REQ_SME") {
-        if (!ai.smeOnly) return { key: requirement.key, status: "na", reason: "非专门面向中小企业", documents: [] };
-        return pending("专门面向中小企业（须提供中小企业声明函）");
-      }
-      if (requirement.key === "REQ_OTHER") {
-        if (!ai.specialRestrictions || !ai.specialRestrictions.length) return { key: requirement.key, status: "na", reason: "无额外特殊排他限制", documents: [] };
-        return pending(`特殊限制：${ai.specialRestrictions[0]}`);
-      }
-    }
-
     if (requirement.state === "not_stated") return pending("公告未写明");
     if (requirement.state === "unavailable") return pending("原文或附件待取得");
     if (requirement.state === "conflict") return pending("版本条款冲突");
     if (requirement.stance === "exempt") return { key: requirement.key, status: "na", reason: "原文明示不设该门槛", documents: [] };
-
-    if (requirement.key === "REQ_JOINT") {
-      if (requirement.stance === "prohibited") return { key: requirement.key, status: "na", reason: "不接受联合体，独立主体参投即可", documents: [] };
-      if (requirement.stance === "allowed") return { key: requirement.key, status: "na", reason: "允许联合体（独立参投时无需协议）", documents: [] };
-    }
-
+    if (requirement.stance === "exception" || requirement.stance === "mixed" || requirement.stance === "prohibited") return pending("限制或例外条件须人工核实");
+    if (requirement.key === "REQ_JOINT" && requirement.stance === "allowed") return pending("公告允许联合体，须核对实际参投主体及约定");
     const excerpts = [...new Set(requirement.entries.map(entry => entry.excerpt))];
-
-    if (requirement.key === "REQ_CREDIT") {
-      return hasUsableBizLicense
-        ? { key: requirement.key, status: "conform", reason: "常规信用及无违法失信要求（营业执照已建档）", documents: [] }
-        : pending("需确认企业信用中国及无失信记录");
-    }
-
-    if (requirement.key === "REQ_BUSINESS") {
-      const hasComplexBiz = excerpts.some(t => /(?:注册资本|从业年限|纳税[额款]?|审计报告|流水)/.test(t));
-      if (!hasComplexBiz && hasUsableBizLicense) {
-        const bizDocs = holdings.filter(doc => doc.usable && (/营业执照/.test(doc.category) || /营业执照/.test(doc.label)));
-        return { key: requirement.key, status: "conform", reason: "有效营业执照已核验", documents: bizDocs };
-      }
-      if (!hasComplexBiz && hasAnyBizLicense) {
-        const bizDocs = holdings.filter(doc => /营业执照/.test(doc.category) || /营业执照/.test(doc.label));
-        return pending("营业执照待核验", bizDocs);
-      }
-      if (!hasComplexBiz) return pending("请上传企业营业执照（一次建档永久自动核验）");
-      return pending("经营及财务门槛须对照文件确认");
-    }
-
-    if (requirement.key === "REQ_PM_CERT") {
-      const combinedPm = excerpts.join(" ");
-      const minGrade = /一级/.test(combinedPm) ? "一级" : /二级|贰级/.test(combinedPm) ? "二级" : "";
-      const specs = [];
-      for (const m of combinedPm.matchAll(/(建筑|市政|机电|水利|公路|装修|装饰)/g)) specs.push(m[1]);
-      const pmCheck = personnelMatchesRequirement({ required: true, specialties: [...new Set(specs)], minGrade }, personnel);
-      if (pmCheck.ok) return { key: requirement.key, status: "conform", reason: pmCheck.reason, documents: [] };
-      return pending(`待配人员：${pmCheck.missingDesc}`);
-    }
-
-    if (requirement.stance === "exception" || requirement.stance === "mixed") return pending("含例外或补充限定条件，建议点 AI 智能提炼");
-
     if (requirement.key === "REQ_CORP_QUAL") {
       const candidates = [];
       const relatedDocuments = new Set();
       let unresolved = null;
       for (const excerpt of excerpts) {
-        // Ignore non-qualification generic lines that slipped in via REGEX
         const clause = qualificationClause(excerpt);
         if (!clause) {
           for (const holding of holdings) {
             if (holding.qualifications.some(spec => spec.key && excerpt.includes(spec.key))) relatedDocuments.add(holding);
           }
-          // Try direct multi-spec OR matching when line uses 或/或者 cleanly without complex AND clauses
-          const specsInLine = qualificationItems(excerpt);
-          if (specsInLine.length && !/同时具备|和.*及以上|并且/.test(excerpt)) {
-            const matchedAny = specsInLine.flatMap(item => holdings.filter(doc => doc.usable && doc.qualifications.some(spec => qualificationMatches(item, spec))));
-            if (matchedAny.length) {
-              candidates.push(...matchedAny);
-              continue;
-            }
-            const relAny = holdings.filter(doc => doc.qualifications.some(spec => specsInLine.some(item => item.key === spec.key)));
-            if (relAny.length) {
-              relAny.forEach(d => relatedDocuments.add(d));
-              unresolved ||= pending("已有对应资质，待核验或等级确认", relAny);
-              continue;
-            }
-          }
-          unresolved ||= pending("复合资质描述，建议点「AI 智能提炼」精准拆解");
+          unresolved ||= pending("复合资格关系或附加限制须人工核实");
           continue;
         }
         const { required, optional } = clause;
@@ -499,44 +351,34 @@ export function evaluateNoticeRequirements(evidence, docs = [], date = new Date(
         if (optional ? matches.every(group => !group.length) : matches.some(group => !group.length)) {
           const unchecked = required.filter((item, index) => !matches[index].length);
           const related = holdings.filter(doc => doc.qualifications.some(spec => unchecked.some(item => item.key === spec.key)));
-          unresolved ||= related.length ? pending("等级、有效期或待一键核验", related)
+          unresolved ||= related.length ? pending("等级、有效期或核验状态待核", related)
             : { key: requirement.key, status: "missing", reason: "档案缺失", documents: [] };
         }
       }
       if (unresolved) {
+        // Search hints do not change persistent matrix judgments or their fingerprints.
         Object.defineProperties(unresolved, {
           matchedDocuments: { value: [...new Set(candidates)] },
           relatedDocuments: { value: [...relatedDocuments] },
         });
         return unresolved;
       }
-      return { key: requirement.key, status: "conform", reason: "已核验档案满足企业资质条款", documents: [...new Set(candidates)] };
+      return { key: requirement.key, status: "conform", reason: "已核验档案满足可解析的企业资质条款", documents: [...new Set(candidates)] };
     }
-
-    if (requirement.key === "REQ_SAFETY_LIC" && requirement.stance !== "prohibited") {
+    if (requirement.key === "REQ_SAFETY_LIC" && excerpts.every(text =>
+      /^(?:(?:资格要求|资格条件|安全生产许可)[：:]\s*)?(?:投标人|供应商|申请人|响应人)?(?:应当|必须|应|须)?(?:具备|具有|提供|持有|取得)?\s*(?:合法有效的|有效的?|在有效期内的)?(?:安全生产许可证|安许证)(?:在有效期内)?[。\s]*$/.test(text) &&
+      /有效|具备|具有|提供|须|持有/.test(text))) {
       const candidates = holdings.filter(doc => /安全生产许可证|安许证/.test(`${doc.category} ${doc.label}`));
-      if (candidates.some(doc => doc.usable)) return { key: requirement.key, status: "conform", reason: "有效安全生产许可证已核验", documents: candidates.filter(doc => doc.usable) };
-      return candidates.length ? pending("安全许可证待核验或临期", candidates)
-        : { key: requirement.key, status: "missing", reason: "档案缺失安全生产许可证", documents: [] };
+      if (candidates.some(doc => doc.usable)) return { key: requirement.key, status: "conform", reason: "已核验有效安全生产许可证", documents: candidates.filter(doc => doc.usable) };
+      return candidates.length ? pending("有效期或核验状态待核", candidates)
+        : { key: requirement.key, status: "missing", reason: "档案缺失", documents: [] };
     }
-
-    return pending("待对照正文或 AI 提炼核对");
+    return pending("条款须人工核实");
   });
-
   const stated = requirements.filter(item => item.reason !== "公告未写明");
-  // Core qualification + safety must be conform; standard non-enterprise items shouldn't drag down if AI says no special restrictions or only PM is pending
-  const corpRes = requirements.find(r => r.key === "REQ_CORP_QUAL");
-  const safRes = requirements.find(r => r.key === "REQ_SAFETY_LIC");
-  const notStatedOrUnavail = (r) => !r || r.reason === "公告未写明" || r.reason === "原文或附件待取得";
-  const coreOk = (notStatedOrUnavail(corpRes) || corpRes.status === "conform") &&
-    (notStatedOrUnavail(safRes) || safRes.status === "conform" || safRes.status === "na");
-
-  const outcome = stated.some(item => item.status === "conform") &&
-    stated.every(item => ["conform", "na"].includes(item.status)) &&
+  const outcome = stated.some(item => item.status === "conform") && stated.every(item => ["conform", "na"].includes(item.status)) &&
     Object.values(evidence.completeness).every(Boolean) &&
     !["deadline", "registrationDeadline", "openTime"].some(key => evidence.fields[key].state === "conflict")
-    ? "conform"
-    : coreOk && corpRes?.status === "conform" ? "partial_core_ok" : "pending";
-
-  return { outcome, coreOk, requirements };
+    ? "conform" : "pending";
+  return { outcome, requirements };
 }

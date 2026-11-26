@@ -1,3 +1,4 @@
+import { fetchPublic } from "./public-http.mjs";
 import { createHash } from "node:crypto";
 import { ensureAttachmentEvidence, indexAttachment, readAttachmentBytes } from "./attachmentEvidence.mjs";
 import { DatabaseSync } from "node:sqlite";
@@ -95,7 +96,7 @@ for (const row of candidates) {
         if (state === "text") read++; else awaitingReview++;
         continue;
       }
-      const res = await fetch(a.url, { signal: AbortSignal.timeout(15000) });
+      const res = await fetchPublic(a.url, { signal: AbortSignal.timeout(15000), maxBytes: 25 * 1024 * 1024 });
       if (!res.ok) throw new Error("fetch_failed");
       const buf = await readAttachmentBytes(res);
       if (!buf.length || buf.length > 25 * 1024 * 1024) throw new Error("size_limit");

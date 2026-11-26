@@ -16,6 +16,7 @@ import { digest, openStore, temporaryPassword, transaction } from "./store.mjs";
 import { evaluateCompliance } from "./compliance.mjs";
 import { describeCapabilities, extractCompanyCapabilities, matchNoticeToCapabilities, shortCompanyName } from "./qualMatcher.mjs";
 import { extractNoticeEvidence, evaluateNoticeRequirements, normalizeQualificationSearchText, qualificationSearchTerms, sameNoticeScope } from "./noticeEvidence.mjs";
+import { fetchPublic } from "./public-http.mjs";
 import { COS_SHARED_PREFIX, cosGetObject, cosPutVerified, getCosCredentials } from "./lib/cos.mjs";
 import { effectiveSourceUrl, collectorFailure, probeAndExtractUrl, runCustomSourceById, validateSourceUrl } from "./custom-source-runner.mjs";
 
@@ -947,6 +948,15 @@ export function createApp({ db, auth, origin }) {
   function grant(id, company) {
     return db.prepare("SELECT view, edit, verify, sensitive_download FROM grant_company WHERE employee=? AND company=?").get(id, company);
   }
+  const actorBinding = id => ({ $lifecycleActor: id });
+  function expiryReadScope(alias) {
+    return `EXISTS (SELECT 1 FROM grant_company g WHERE g.employee=$lifecycleActor AND g.company=${alias}.company_id AND g.view=1)`;
+  }
+  function lotWriteAllowed(user, noticeId, chosenCompany = "") {
+    const bound = db.prepare("SELECT company_id FROM lot_workflow WHERE notice_id=?").get(noticeId)?.company_id || "";
+    return (!bound || Boolean(grant(user.id, bound)?.edit)) && (!chosenCompany || Boolean(grant(user.id, chosenCompany)?.edit)) &&
+      (user.role === "admin" || Boolean(db.prepare("SELECT 1 FROM grant_company WHERE employee=? AND edit=1 LIMIT 1").get(user.id)));
+  }
   function visible(id, notice) {
     return db.prepare("SELECT data FROM notice WHERE id=? AND (draft=0 OR owner=?)").get(notice, id);
   }
@@ -1085,8 +1095,8 @@ export function createApp({ db, auth, origin }) {
   function recommendedCompany(noticeId, companyId, evidence, caps) {
     const candidate = matchNoticeToCapabilities({ evidence }, caps);
     if (!candidate) return null;
-    const { results, fingerprint } = companyMatch(noticeId, companyId, evidence, caps?.documents, caps?.personnel);
-    if (results.outcome !== "conform" && results.outcome !== "partial_core_ok") return null;
+    const { results, fingerprint } = companyMatch(noticeId, companyId, evidence);
+    if (results.outcome !== "conform") return null;
     const blocked = db.prepare(`SELECT 1 FROM lot_matrix_cell c
       JOIN qualification_review_basis b ON b.notice_id=c.notice_id AND b.company_id=c.company_id AND b.req_key=c.req_key
       WHERE c.notice_id=? AND c.company_id=? AND b.fingerprint=? AND c.status IN ('non_conform','pending','missing') LIMIT 1`)
@@ -1145,7 +1155,6 @@ export function createApp({ db, auth, origin }) {
       }
     }
     const aiExtract = !observedAt ? getCachedNoticeAiExtract(db, id) : null;
-    const qualTagsRow = db.prepare("SELECT qual_tags FROM notice_meta WHERE id=?").get(id);
     const evidence = extractNoticeEvidence({
       body: noticeBodyAvailable(parsed) ? parsed.body : "",
       bodyComplete: noticeBodyComplete(parsed),
@@ -1154,7 +1163,6 @@ export function createApp({ db, auth, origin }) {
       attachments,
       attachmentsKnown: !["not_checked", "unknown"].includes(parsed.evidence?.attachmentStatus),
       aiExtract,
-      qualTags: qualTagsRow?.qual_tags || "",
     });
     if (!observedAt && parsed.stage==="tender" && parsed.projectKey) {
       const change=db.prepare(`SELECT (SELECT json_object('action',x.action,'title',x.title,'url',x.url) FROM (${latestAvailability}) x) AS latest
@@ -1429,6 +1437,8 @@ export function createApp({ db, auth, origin }) {
         const meta = db.prepare("SELECT id, title, project_key, CAST(deadline_ns AS TEXT) AS dl_ns, deadline_text, stage, qual_tags, trade_type FROM notice_meta WHERE id=?").get(noticeId);
         const notice = visible(user.id, noticeId);
         if (!meta || !notice) return missing();
+        const chosenCompany = typeof body.companyId === "string" ? body.companyId.trim() : "";
+        if (!lotWriteAllowed(user, noticeId, chosenCompany)) return denied(user.id, "修改参投跟进", noticeId);
         const decision = ["watching", "bidding", "declined", "none"].includes(body.decision) ? body.decision : "watching";
         const assigneeId = typeof body.assigneeId === "string" && body.assigneeId.trim() ? body.assigneeId.trim() : null;
         if (assigneeId && !employee(assigneeId)) return invalid("所选负责人不存在，请刷新后重选。");
@@ -1446,7 +1456,7 @@ export function createApp({ db, auth, origin }) {
         }
 
         // Auto-infer matching company when decision === 'bidding' and no company_id bound yet
-        let inferredCompanyId = typeof body.companyId === "string" ? body.companyId.trim() : "";
+        let inferredCompanyId = decision === "bidding" ? chosenCompany : "";
         let inferredCompanyName = "";
         const existingWf = db.prepare("SELECT company_id FROM lot_workflow WHERE notice_id=?").get(noticeId);
         if (decision === "bidding" && (!existingWf || !existingWf.company_id)) {
@@ -1545,6 +1555,7 @@ export function createApp({ db, auth, origin }) {
           for (const nid of ids) {
             const meta = db.prepare("SELECT id, project_key FROM notice_meta WHERE id=?").get(nid);
             if (!meta || !visible(user.id,nid)) { failed.push({ id: nid, reason: "记录不存在" }); continue; }
+            if (!lotWriteAllowed(user, nid)) { failed.push({ id: nid, reason: "没有标段编辑权限" }); continue; }
             if (decision === "none") {
               db.prepare("DELETE FROM project_follow WHERE notice_id=?").run(nid);
             } else {
@@ -1616,11 +1627,16 @@ export function createApp({ db, auth, origin }) {
         const alertId = decodeURIComponent(alertUpdate[1]);
         const expRow = db.prepare("SELECT * FROM company_expiry_todo WHERE id=?").get(alertId);
         if (expRow) {
+          const permission = grant(user.id, expRow.company_id);
+          if (!permission?.view) return missing();
+          if (!permission.edit && (body.status !== "done" || !expRow.assignee || expRow.assignee !== user.id || body.assigneeId !== undefined)) return forbidden();
           const status = ["open", "done", "dismissed"].includes(body.status) ? body.status : expRow.status;
           const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 200) : "";
           if (status === "dismissed" && !reason) return invalid("忽略到期提醒必须填写原因。");
           const assignee = body.assigneeId === null ? null : (typeof body.assigneeId === "string" && body.assigneeId.trim() ? body.assigneeId.trim() : expRow.assignee);
-          if (assignee && !employee(assignee)) return invalid("所选负责人不存在。");
+          if (assignee && assignee !== expRow.assignee && (!employee(assignee) || !grant(assignee, expRow.company_id)?.view)) {
+            return invalid("负责人须拥有该公司的查看权限。");
+          }
           transaction(db, () => {
             db.prepare("UPDATE company_expiry_todo SET status=?, assignee=?, updated_at=CURRENT_TIMESTAMP WHERE id=?")
               .run(status, assignee, alertId);
@@ -1874,7 +1890,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
             let ocrFields = {};
             let ocrOk = false;
             try {
-              const ocrRes = await extractOcrAndFieldsFromBuffer({ buf: bytes, filename: it.name, mode: "doc", aiConfig: getAiConfig() });
+              const ocrRes = await extractOcrAndFieldsFromBuffer({ buf: bytes, filename: it.name, mode: "doc", aiConfig: process.env.CIVIC_RADAR_ENABLE_DOCUMENT_AI === "1" ? getAiConfig() : null });
               ocrFields = ocrRes.fields || {};
               ocrOk = (ocrRes.charCount || 0) >= 15;
             } catch {}
@@ -2103,6 +2119,8 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
 
       // 4J. User custom source: probe URL & preview auto-matching against company capabilities
       if (pathname === "/api/custom-sources/probe") {
+        if (user.role !== "admin") return forbidden();
+        if (process.env.CIVIC_RADAR_ENABLE_COLLECTION !== "1") return invalid("自动采集尚未启用，请联系管理员。");
         const rawUrl = String(body.url || body.listUrl || "").trim();
         const linkSelector = String(body.linkSelector || "").trim().slice(0, 120);
         const keywordFilter = String(body.keywordFilter || "").trim().slice(0, 120);
@@ -2138,6 +2156,8 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
 
       // 4K. User custom source: create & immediately crawl into Opportunity Pool
       if (pathname === "/api/custom-sources") {
+        if (user.role !== "admin") return forbidden();
+        if (process.env.CIVIC_RADAR_ENABLE_COLLECTION !== "1") return invalid("自动采集尚未启用，请联系管理员。");
         let listUrl;
         try {
           listUrl = validateSourceUrl(body.listUrl || body.url);
@@ -2171,6 +2191,8 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       // 4L. User custom source: run immediately
       const runCustomMatch = pathname.match(/^\/api\/custom-sources\/([^/]+)\/run$/);
       if (runCustomMatch) {
+        if (user.role !== "admin") return forbidden();
+        if (process.env.CIVIC_RADAR_ENABLE_COLLECTION !== "1") return invalid("自动采集尚未启用，请联系管理员。");
         const cid = decodeURIComponent(runCustomMatch[1]);
         const row = db.prepare("SELECT * FROM custom_source WHERE id=?").get(cid);
         if (!row) return missing();
@@ -2183,6 +2205,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       // 4M. User custom source: delete
       const delCustomMatch = pathname.match(/^\/api\/custom-sources\/([^/]+)\/delete$/);
       if (delCustomMatch) {
+        if (user.role !== "admin") return forbidden();
         const cid = decodeURIComponent(delCustomMatch[1]);
         const row = db.prepare("SELECT * FROM custom_source WHERE id=?").get(cid);
         if (!row) return missing();
@@ -2678,8 +2701,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         const noticeId = wfMatch[1];
         if (!visible(user.id, noticeId)) return missing();
         const companyId = typeof body.companyId === "string" ? body.companyId.trim() : "";
-        const hasAnyEdit = user.role === "admin" || !!db.prepare("SELECT 1 FROM grant_company WHERE employee=? AND edit=1 LIMIT 1").get(user.id);
-        if (companyId ? !grant(user.id, companyId)?.edit : !hasAnyEdit) {
+        if (!lotWriteAllowed(user, noticeId, companyId)) {
           return denied(user.id, "更新标段全流程跟进", companyId || noticeId);
         }
         const step = Number(body.step || 1);
@@ -3031,7 +3053,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
             continue;
           }
           try {
-            const upstream = await fetch(a.url, { signal: AbortSignal.timeout(15000) });
+            const upstream = await fetchPublic(a.url, { signal: AbortSignal.timeout(15000), maxBytes: 25 * 1024 * 1024 });
             const buf = await readAttachmentBytes(upstream);
             if (!buf.length || buf.length > 25 * 1024 * 1024) continue;
             const sha = digest(buf);
@@ -3135,8 +3157,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         const noticeId = typeof body.noticeId === "string" ? body.noticeId.trim() : "";
         if (!noticeId || !visible(user.id, noticeId)) return invalid("请选择有效的已选定标段。");
         const companyId = typeof body.companyId === "string" ? body.companyId.trim() : "";
-        const hasAnyEdit = user.role === "admin" || !!db.prepare("SELECT 1 FROM grant_company WHERE employee=? AND edit=1 LIMIT 1").get(user.id);
-        if (companyId ? !grant(user.id, companyId)?.edit : !hasAnyEdit) return denied(user.id, "登记资金流水", companyId || "标段资金");
+        if (!lotWriteAllowed(user, noticeId, companyId)) return denied(user.id, "登记资金流水", companyId || noticeId);
         const category = ["deposit", "guarantee", "expense", "performance_cash", "performance_guarantee"].includes(body.category) ? body.category : "deposit";
         const entryType = ["paid", "refund_received", "non_refund_deduct", "in_transit", "transfer_in", "transfer_out", "guarantee_face", "urge"].includes(body.entryType) ? body.entryType : "paid";
         const amountYuan = Number(body.amountYuan ?? 0);
@@ -3175,10 +3196,10 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       if (finRevMatch) {
         const fid = finRevMatch[1];
         const row = db.prepare("SELECT * FROM finance_entry WHERE id=?").get(fid);
-        if (!row) return missing();
+        if (!row || !visible(user.id, row.notice_id)) return missing();
         const canReverse = row.company_id
           ? (grant(user.id, row.company_id)?.verify || grant(user.id, row.company_id)?.edit)
-          : (user.role === "admin" || !!db.prepare("SELECT 1 FROM grant_company WHERE employee=? AND edit=1 LIMIT 1").get(user.id));
+          : row.actor === user.id && lotWriteAllowed(user, row.notice_id);
         if (!canReverse) return denied(user.id, "冲销资金流水", row.company_id || fid);
         const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 200) : "";
         if (!reason) return invalid("冲销流水属于高风险操作，必须填写原因，历史记录将保留不删除。");
@@ -3193,6 +3214,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       if (pathname === "/api/opening") {
         const noticeId = typeof body.noticeId === "string" ? body.noticeId.trim() : "";
         if (!noticeId || !visible(user.id, noticeId)) return invalid("请选择有效的已选定标段。");
+        if (!lotWriteAllowed(user, noticeId)) return denied(user.id, "记录开标回传", noticeId);
         const openMode = ["现场", "远程", "混合", "未标注"].includes(body.openMode) ? body.openMode : "未标注";
         const venue = typeof body.venue === "string" ? body.venue.trim().slice(0, 200) : "";
         const arriveTime = typeof body.arriveTime === "string" ? body.arriveTime.trim().slice(0, 40) : "";
@@ -3236,6 +3258,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       if (pathname === "/api/estimates") {
         const noticeId = typeof body.noticeId === "string" ? body.noticeId.trim() : "";
         if (!noticeId || !visible(user.id, noticeId)) return invalid("请选择有效的标段。");
+        if (!lotWriteAllowed(user, noticeId)) return denied(user.id, "登记评标测算", noticeId);
         const ruleName = typeof body.ruleName === "string" && body.ruleName.trim() ? body.ruleName.trim().slice(0, 60) : "合成基准价法";
         const params = body.params && typeof body.params === "object" ? body.params : {};
         const snapshot = Array.isArray(body.snapshot) ? body.snapshot.slice(0, 60) : [];
@@ -3258,7 +3281,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         const noticeId = typeof body.noticeId === "string" ? body.noticeId.trim() : "";
         if (!noticeId || !visible(user.id, noticeId)) return invalid("请选择有效的已选定标段。");
         const companyId = typeof body.companyId === "string" ? body.companyId.trim() : "";
-        if (companyId && !grant(user.id, companyId)?.edit) return denied(user.id, "登记开标日程", companyId);
+        if (!lotWriteAllowed(user, noticeId, companyId)) return denied(user.id, "登记开标日程", companyId || noticeId);
         const openMode = ["现场", "远程", "混合", "未标注"].includes(body.openMode) ? body.openMode : "未标注";
         const submitTime = typeof body.submitTime === "string" ? body.submitTime.trim().slice(0, 30) : "";
         const decryptWindow = typeof body.decryptWindow === "string" ? body.decryptWindow.trim().slice(0, 60) : "";
@@ -3271,8 +3294,10 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         if (departAt && untilAt && departAt > untilAt) return invalid("行程出发时间不能晚于结束时间。");
         const note = typeof body.note === "string" ? body.note.trim().slice(0, 300) : "";
         const sid = typeof body.id === "string" && body.id.trim() ? body.id.trim() : `sch_${randomUUID().slice(0, 10)}`;
+        const existing = db.prepare("SELECT notice_id, company_id, updated_by FROM bid_schedule WHERE id=?").get(sid);
+        if (existing && (existing.notice_id !== noticeId || !lotWriteAllowed(user, noticeId, existing.company_id) ||
+            (!existing.company_id && existing.updated_by !== user.id && user.role !== "admin"))) return forbidden();
         transaction(db, () => {
-          const existing = db.prepare("SELECT version FROM bid_schedule WHERE id=?").get(sid);
           if (existing) {
             db.prepare(`UPDATE bid_schedule SET notice_id=?,company_id=?,open_mode=?,submit_time=?,decrypt_window=?,open_time=?,venue=?,delegate_id=?,depart_at=?,until_at=?,note=?,version=version+1,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
               .run(noticeId, companyId, openMode, submitTime, decryptWindow, openTime, venue, delegateId, departAt, untilAt, note, user.id, sid);
@@ -3291,7 +3316,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         const noticeId = typeof body.noticeId === "string" ? body.noticeId.trim() : "";
         if (!noticeId || !visible(user.id, noticeId)) return invalid("请选择有效的已选定标段。");
         const companyId = typeof body.companyId === "string" ? body.companyId.trim() : "";
-        if (companyId && !grant(user.id, companyId)?.edit) return denied(user.id, "更新结果与移交", companyId);
+        if (!lotWriteAllowed(user, noticeId, companyId)) return denied(user.id, "更新结果与移交", companyId || noticeId);
         const candidateStatus = ["未标注", "第一候选人", "第二候选人", "第三候选人", "未入围", "公示异议中"].includes(body.candidateStatus) ? body.candidateStatus : "未标注";
         const finalResult = ["未标注", "中标", "未中标", "流标或终止"].includes(body.finalResult) ? body.finalResult : "未标注";
         const awardYuan = body.awardAmountYuan !== "" && body.awardAmountYuan !== null && body.awardAmountYuan !== undefined ? Number(body.awardAmountYuan) : null;
@@ -3473,13 +3498,12 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 14000);
           try {
-            const resp = await fetch(rawUrl, {
+            const resp = await fetchPublic(rawUrl, {
               headers: {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9",
               },
-              redirect: "follow",
               signal: controller.signal,
             });
             clearTimeout(timer);
@@ -3492,8 +3516,9 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
               html = isGbk ? new TextDecoder("gb18030", { fatal: false }).decode(buf) : buf.toString("utf8");
             }
           } catch (err) {
-            clearTimeout(timer);
             fetchWarning = err?.name === "AbortError" ? "目标网页抓取超时（14秒）" : `网页抓取受限（${err?.message || "网络异常"}）`;
+          } finally {
+            clearTimeout(timer);
           }
         }
 
@@ -3538,13 +3563,14 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
 
         // If user chose to link an existing opportunity already in the pool, just follow it!
         if (existingNoticeId) {
-          const ex = db.prepare("SELECT id, title FROM notice_meta WHERE id=?").get(existingNoticeId);
-          if (!ex) return missing();
+          const ex = db.prepare("SELECT id, title, project_key FROM notice_meta WHERE id=?").get(existingNoticeId);
+          if (!ex || !visible(user.id, existingNoticeId)) return missing();
+          if (!lotWriteAllowed(user, existingNoticeId, companyId)) return denied(user.id, "关联项目入库", existingNoticeId);
           transaction(db, () => {
-            db.prepare(`INSERT INTO project_follow(notice_id,decision,assignee,note,updated_by,updated_at)
-              VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+            db.prepare(`INSERT INTO project_follow(notice_id,project_key,decision,assignee,note,updated_by,updated_at)
+              VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)
               ON CONFLICT(notice_id) DO UPDATE SET decision=excluded.decision, note=excluded.note, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`)
-              .run(ex.id, decision, user.id, note, user.id);
+              .run(ex.id, ex.project_key, decision, user.id, note, user.id);
             if (companyId) {
               db.prepare(`INSERT INTO lot_workflow(notice_id,company_id,active_step,updated_by,updated_by_name,updated_at)
                 VALUES (?,?,1,?,?,CURRENT_TIMESTAMP)
@@ -3556,6 +3582,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
           return json({ ok: true, id: ex.id, title: ex.title, existed: true, message: "已直接将机会池中的原标段转入项目库，未产生重复记录。" });
         }
 
+        if (!lotWriteAllowed(user, "", companyId)) return denied(user.id, "录入项目", companyId);
         const rawUrl = typeof body.url === "string" ? body.url.trim() : "";
         let parsedUrl;
         try {
@@ -3589,13 +3616,12 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 14000);
           try {
-            const resp = await fetch(rawUrl, {
+            const resp = await fetchPublic(rawUrl, {
               headers: {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9",
               },
-              redirect: "follow",
               signal: controller.signal,
             });
             clearTimeout(timer);
@@ -3607,8 +3633,9 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
               html = isGbk ? new TextDecoder("gb18030", { fatal: false }).decode(buf) : buf.toString("utf8");
             }
           } catch (err) {
-            clearTimeout(timer);
             fetchWarning = err?.name === "AbortError" ? "目标网页抓取超时（14秒）" : `网页抓取受限（${err?.message || "网络异常"}）`;
+          } finally {
+            clearTimeout(timer);
           }
         }
 
@@ -3902,7 +3929,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
           return invalid("文件大小须在 1 字节至 15MB 之间。");
         }
         try {
-          const ocrRes = await extractOcrAndFieldsFromBuffer({ buf, filename, mode, aiConfig: getAiConfig() });
+          const ocrRes = await extractOcrAndFieldsFromBuffer({ buf, filename, mode, aiConfig: process.env.CIVIC_RADAR_ENABLE_DOCUMENT_AI === "1" ? getAiConfig() : null });
           audit(user.id, "PDF/图片OCR识别", `${mode}/${filename}`, `${ocrRes.engine} (${ocrRes.charCount}字)`);
           return json({
             ok: true,
@@ -3974,10 +4001,14 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       if (pathname === "/api/finance/pay-tasks") {
         const noticeId = typeof body.noticeId === "string" ? body.noticeId.trim() : "";
         if (!noticeId || !visible(user.id, noticeId)) return invalid("请选择有效的项目标段。");
-        const companyId = typeof body.companyId === "string" ? body.companyId.trim() : "";
+        const boundCompany = db.prepare("SELECT company_id FROM lot_workflow WHERE notice_id=?").get(noticeId)?.company_id || "";
+        const companyId = (typeof body.companyId === "string" && body.companyId.trim()) || boundCompany;
+        if (!companyId) return invalid("请选择参投公司后发起打款任务。");
+        if (!lotWriteAllowed(user, noticeId, companyId)) return denied(user.id, "发起打款任务", companyId);
+        if (boundCompany && boundCompany !== companyId) return invalid("打款任务的公司须与该标段已绑定公司一致。");
         const depositMethod = typeof body.depositMethod === "string" && body.depositMethod.trim() ? body.depositMethod.trim().slice(0, 60) : "基本户网银转账（现金保证金）";
         const amountYuan = Number(body.amountYuan ?? 0);
-        if (Number.isNaN(amountYuan) || amountYuan < 0) return invalid("请填写正确的保证金金额。");
+        if (!Number.isFinite(amountYuan) || amountYuan <= 0 || !Number.isSafeInteger(Math.round(amountYuan * 100))) return invalid("请填写正确的保证金金额。");
         const amountFen = Math.round(amountYuan * 100);
         const payeeName = typeof body.payeeName === "string" ? body.payeeName.trim().slice(0, 120) : "";
         const payeeAccount = typeof body.payeeAccount === "string" ? body.payeeAccount.trim().slice(0, 80) : "";
@@ -3987,10 +4018,17 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
 
         // Resolve default finance user
         const defFinSaved = db.prepare("SELECT value FROM app_setting WHERE key='default_finance_user_id'").get()?.value || "";
-        const finEmp = (typeof body.assigneeId === "string" && body.assigneeId.trim() && employee(body.assigneeId.trim()))
-          || (defFinSaved && employee(defFinSaved))
-          || db.prepare("SELECT id, username, name FROM employee WHERE approval='approved' AND perspective='finance' ORDER BY id LIMIT 1").get()
-          || user;
+        const requestedAssignee = typeof body.assigneeId === "string" ? body.assigneeId.trim() : "";
+        const eligibleAssignee = id => {
+          const target = id && employee(id);
+          return target?.approval === "approved" && grant(id, companyId)?.view ? target : null;
+        };
+        const explicitAssignee = eligibleAssignee(requestedAssignee);
+        if (requestedAssignee && !explicitAssignee) return invalid("财务负责人须有参投公司的查看权限。");
+        const finEmp = explicitAssignee || eligibleAssignee(defFinSaved) || db.prepare(`SELECT e.id,e.name FROM employee e
+          JOIN grant_company g ON g.employee=e.id AND g.company=? AND g.view=1
+          WHERE e.approval='approved' AND e.perspective='finance' ORDER BY e.id LIMIT 1`).get(companyId);
+        if (!finEmp) return invalid("请指定拥有该公司查看权限的财务负责人。");
 
         const nm = db.prepare("SELECT title, project_key, CAST(deadline_ns AS TEXT) AS dl FROM notice_meta WHERE id=?").get(noticeId);
         const coName = companyId ? (db.prepare("SELECT name FROM company WHERE id=?").get(companyId)?.name || "") : "";
@@ -4027,7 +4065,9 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       if (payConfirmMatch) {
         const tid = payConfirmMatch[1];
         const task = db.prepare("SELECT * FROM deposit_pay_task WHERE id=?").get(tid);
-        if (!task) return missing();
+        if (!task || !visible(user.id, task.notice_id) || !task.company_id || !grant(user.id, task.company_id)?.view) return missing();
+        if (task.assignee_id !== user.id) return forbidden();
+        if (task.status !== "pending") return json({ message: "该打款任务已经处理。" }, 409);
         const payNote = typeof body.payNote === "string" ? body.payNote.trim().slice(0, 300) : "";
         const paidAt = typeof body.paidAt === "string" && body.paidAt.trim()
           ? body.paidAt.trim().replace("T", " ").slice(0, 30)
@@ -4036,7 +4076,8 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         // Support uploading 1 or multiple receipt files (images/PDF) directly into COS
         const rawFiles = Array.isArray(body.files) ? body.files : [];
         const uploadedReceipts = [];
-        const effCoId = task.company_id || (db.prepare("SELECT id FROM company LIMIT 1").get()?.id || "");
+        const receiptRows = [];
+        const effCoId = task.company_id;
         for (const rf of rawFiles.slice(0, 10)) {
           const b64 = typeof rf?.dataBase64 === "string" ? rf.dataBase64.replace(/^data:[^;]+;base64,/, "").trim() : "";
           if (!b64) continue;
@@ -4060,9 +4101,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
             storageBackend = "cos";
             storeBytes = Buffer.alloc(0);
           }
-          db.prepare(`INSERT INTO company_file(id,company_id,owner_type,owner_id,filename,mime_type,size_bytes,sha256,bytes,storage_backend,cos_key,uploaded_by)
-            VALUES (?,?,'doc',?,?,?,?,?,?,?,?,?)`)
-            .run(fileId, effCoId, `pay_receipt_${tid}`, fname, mimeType, buf.length, sha, storeBytes, storageBackend, cosKey, user.id);
+          receiptRows.push([fileId, effCoId, `pay_receipt_${tid}`, fname, mimeType, buf.length, sha, storeBytes, storageBackend, cosKey, user.id]);
           uploadedReceipts.push({ fileId, filename: fname });
         }
 
@@ -4074,7 +4113,11 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         const fid = `fin_${randomUUID().slice(0, 10)}`;
         const fullNote = [`【${task.deposit_method}】`, task.payee_name ? `收款方:${task.payee_name}` : "", task.payee_account ? `账号:${task.payee_account}` : "", payNote || task.note, allReceipts.length ? `含${allReceipts.length}份回执` : ""].filter(Boolean).join(" · ").slice(0, 300);
 
-        transaction(db, () => {
+        const committed = transaction(db, () => {
+          if (!db.prepare("SELECT 1 FROM deposit_pay_task WHERE id=? AND status='pending' AND assignee_id=?").get(tid,user.id)) return false;
+          const saveReceipt = db.prepare(`INSERT INTO company_file(id,company_id,owner_type,owner_id,filename,mime_type,size_bytes,sha256,bytes,storage_backend,cos_key,uploaded_by)
+            VALUES (?,?,'doc',?,?,?,?,?,?,?,?,?)`);
+          for (const row of receiptRows) saveReceipt.run(...row);
           db.prepare(`INSERT INTO finance_entry(id,notice_id,company_id,lot_round,category,entry_type,amount_fen,pay_status,receive_status,refund_cond,refund_status,dispute_status,due_date,note,actor,actor_name)
             VALUES (?,?,?,'默认标段 · 第1轮',?,?,?,'已打款','已核实到账','未核实','未申请','无争议',?,?,?,?)`)
             .run(fid, task.notice_id, effCoId, category, entryType, task.amount_fen, task.due_time.slice(0, 10), fullNote, user.id, user.name);
@@ -4083,14 +4126,16 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
             .run(user.id, user.name, paidAt, JSON.stringify(allReceipts), fid, payNote, payNote, tid);
 
           // Mark related finance alert_todo as done & advance lot_workflow to step 4
-          db.prepare("UPDATE alert_todo SET status='done', updated_at=CURRENT_TIMESTAMP WHERE notice_id=? AND status='open' AND (title LIKE '财务待打保证金%' OR title LIKE '待办保证金%')").run(task.notice_id);
+          db.prepare("UPDATE alert_todo SET status='done', updated_at=CURRENT_TIMESTAMP WHERE payment_task_id=? AND status='open'").run(tid);
           db.prepare(`INSERT INTO lot_workflow(notice_id,company_id,active_step,updated_by,updated_by_name,updated_at)
             VALUES (?,?,4,?,?,CURRENT_TIMESTAMP)
             ON CONFLICT(notice_id) DO UPDATE SET active_step=MAX(active_step, 4), updated_by=excluded.updated_by, updated_by_name=excluded.updated_by_name, updated_at=CURRENT_TIMESTAMP`)
             .run(task.notice_id, effCoId, user.id, user.name);
 
           audit(user.id, "财务确认打款并传回执", `${tid}/${(task.amount_fen / 100).toFixed(2)}元/回执${allReceipts.length}份`, "已打款");
+          return true;
         });
+        if (!committed) return json({ message: "该打款任务已被处理，未重复记账。" }, 409);
         return json({ ok: true, financeEntryId: fid, receipts: allReceipts });
       }
 
@@ -4187,13 +4232,17 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
       const stepFilter = Number(searchParams.get("step") || 0) || 0;
       const q = (searchParams.get("q") || "").trim();
       const nowNs = Number(BigInt(Date.now()) * 1000000n);
-      const clauses = ["pf.decision IN ('watching','bidding')"];
+      const projectScope = followedLifecycleReadScope();
+      const financeScope = lifecycleReadScope("fe", "fe.company_id", "fe.actor");
+      const active = `pf.decision IN ('watching','bidding') AND ${projectScope}`;
+      const actor = actorBinding(user.id);
+      const clauses = [active];
       const args = [];
       if (dec === "bidding" || dec === "watching") {
         clauses.push("pf.decision = ?");
         args.push(dec);
       } else if (dec === "pending_refund") {
-        clauses.push("(SELECT coalesce(sum(CASE WHEN fe.entry_type='paid' THEN fe.amount_fen WHEN fe.entry_type='refund_received' THEN -fe.amount_fen ELSE 0 END),0) FROM finance_entry fe WHERE fe.notice_id=m.id AND fe.category='deposit' AND fe.reversed=0) > 0");
+        clauses.push(`(SELECT coalesce(sum(CASE WHEN fe.entry_type='paid' THEN fe.amount_fen WHEN fe.entry_type='refund_received' THEN -fe.amount_fen ELSE 0 END),0) FROM finance_entry fe WHERE fe.notice_id=m.id AND fe.category='deposit' AND fe.reversed=0 AND ${financeScope}) > 0`);
       }
       if (companyId === "__none__") {
         clauses.push("(lw.company_id IS NULL OR lw.company_id = '')");
@@ -4228,7 +4277,7 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
                coalesce(lw.prep_pm_name, '') AS prepPmName,
                coalesce(lw.predict_status, '待分析') AS predictStatus,
                coalesce(lw.refund_track_status, '未进入退保') AS refundTrackStatus,
-               coalesce((SELECT sum(CASE WHEN fe.entry_type='paid' THEN fe.amount_fen WHEN fe.entry_type='refund_received' THEN -fe.amount_fen ELSE 0 END) FROM finance_entry fe WHERE fe.notice_id=m.id AND fe.category='deposit' AND fe.reversed=0), 0) AS depositOutstandingFen,
+               coalesce((SELECT sum(CASE WHEN fe.entry_type='paid' THEN fe.amount_fen WHEN fe.entry_type='refund_received' THEN -fe.amount_fen ELSE 0 END) FROM finance_entry fe WHERE fe.notice_id=m.id AND fe.category='deposit' AND fe.reversed=0 AND ${financeScope}), 0) AS depositOutstandingFen,
                (SELECT count(*) FROM alert_todo al JOIN notice linked ON linked.id=al.notice_id
                 JOIN notice base ON base.id=m.id
                 WHERE al.status='open' AND (${alertStatus("al")})='open' AND ${projectAlertReadScope("al")}
@@ -4244,28 +4293,30 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         LEFT JOIN company comp ON comp.id = lw.company_id
         WHERE ${clauses.join(" AND ")}
         ORDER BY CASE WHEN m.deadline_ns > ? THEN 0 ELSE 1 END, CASE WHEN m.deadline_ns > 0 THEN m.deadline_ns ELSE 999999999999999999 END ASC, pf.updated_at DESC
-      `).all({ $lifecycleActor: user.id }, ...args, nowNs);
+      `).all(actor, ...args, nowNs);
       const companyCounts = db.prepare(`
         SELECT coalesce(lw.company_id, '') AS companyId, coalesce(c.name, '未指定参投公司') AS companyName, count(*) AS cnt
         FROM project_follow pf
         LEFT JOIN lot_workflow lw ON lw.notice_id = pf.notice_id
         LEFT JOIN company c ON c.id = lw.company_id
-        WHERE pf.decision IN ('watching','bidding')
+        WHERE ${active}
         GROUP BY coalesce(lw.company_id, '')
         ORDER BY cnt DESC
-      `).all();
+      `).all(actor);
       const pendingRefundRows = db.prepare(`
         SELECT coalesce(sum(CASE WHEN fe.entry_type='paid' THEN fe.amount_fen WHEN fe.entry_type='refund_received' THEN -fe.amount_fen ELSE 0 END),0) AS outFen
         FROM project_follow pf
         JOIN finance_entry fe ON fe.notice_id = pf.notice_id AND fe.category='deposit' AND fe.reversed=0
-        WHERE pf.decision IN ('watching','bidding')
+        WHERE ${active} AND ${financeScope}
         GROUP BY pf.notice_id
         HAVING outFen > 0
-      `).all();
+      `).all(actor);
+      const totals = db.prepare(`SELECT count(*) AS allCount,
+        count(CASE WHEN pf.decision='bidding' THEN 1 END) AS bidding,
+        count(CASE WHEN pf.decision='watching' THEN 1 END) AS watching
+        FROM project_follow pf WHERE ${active}`).get(actor);
       const counts = {
-        all: db.prepare("SELECT count(*) AS c FROM project_follow WHERE decision IN ('watching','bidding')").get().c,
-        bidding: db.prepare("SELECT count(*) AS c FROM project_follow WHERE decision='bidding'").get().c,
-        watching: db.prepare("SELECT count(*) AS c FROM project_follow WHERE decision='watching'").get().c,
+        all: totals.allCount, bidding: totals.bidding, watching: totals.watching,
         pendingRefund: pendingRefundRows.length,
         totalOutstandingDepositFen: pendingRefundRows.reduce((s, r) => s + Number(r.outFen || 0), 0),
         pendingRefundTotalFen: pendingRefundRows.reduce((s, r) => s + Number(r.outFen || 0), 0),
@@ -4274,9 +4325,9 @@ print(json.dumps({'items': items, 'skipped': skipped}, ensure_ascii=False))
         SELECT coalesce(lw.active_step, 1) AS step, count(*) AS cnt
         FROM project_follow pf
         LEFT JOIN lot_workflow lw ON lw.notice_id = pf.notice_id
-        WHERE pf.decision IN ('watching','bidding')
+        WHERE ${active}
         GROUP BY coalesce(lw.active_step, 1)
-      `).all();
+      `).all(actor);
       const stepCounts = {};
       for (const r of stepRows) stepCounts[String(r.step)] = r.cnt;
       return json({ items, counts, companyCounts, stepCounts });
@@ -5569,7 +5620,7 @@ with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslev
         const pendingExtra = results.requirements.filter(req => req.status === "pending" && req.reason !== "公告未写明" && !req.documents.length);
         const status = coreCorpMissing ? "pending"
           : (results.outcome === "conform" && !activeReviews.length) ? "supported"
-          : (results.outcome === "partial_core_ok" || supported.length) ? "partial"
+          : supported.length ? "partial"
           : archival.length ? "archive_pending" : "pending";
         const proofs = (coreCorpMissing ? [corpReqRes] : [...new Set([...supported, ...archival, ...pendingExtra])]).slice(0, 3).map(req => ({
           reqKey: req.key,
@@ -5663,7 +5714,7 @@ with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslev
       const sources = db.prepare("SELECT source AS value, count(*) AS cnt FROM notice_meta WHERE source<>'' GROUP BY source ORDER BY cnt DESC LIMIT 30").all();
       const openAlerts = db.prepare(`SELECT count(*) AS c FROM alert_todo a WHERE a.status='open' AND (${alertStatus("a")})='open'
         AND ${projectAlertReadScope("a")}`).get({ $lifecycleActor: user.id }).c
-        + db.prepare("SELECT count(*) AS c FROM company_expiry_todo WHERE status='open'").get().c;
+        + db.prepare(`SELECT count(*) AS c FROM company_expiry_todo e WHERE e.status='open' AND ${expiryReadScope("e")}`).get(actorBinding(user.id)).c;
 
       return json({
         items, total, page, pageSize, tabCounts, openAlerts, matchSummary, companyOptions,
@@ -5689,7 +5740,7 @@ with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslev
       try {
         const ctl = new AbortController();
         const tmr = setTimeout(() => ctl.abort(), 12000);
-        const res = await fetch(targetUrl, {
+        const res = await fetchPublic(targetUrl, {
           headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36" },
           signal: ctl.signal,
         });
@@ -6210,7 +6261,7 @@ with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslev
                  a.created_at DESC
         LIMIT 120
       `).all(actor, ...args);
-      const expClauses = [];
+      const expClauses = [expiryReadScope("e")];
       const expArgs = [];
       if (status !== "all") { expClauses.push("e.status = ?"); expArgs.push(status); }
       if (mine) { expClauses.push("(e.assignee = ? OR e.assignee IS NULL)"); expArgs.push(user.id); }
@@ -6234,10 +6285,10 @@ with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslev
         ${expWhere}
         ORDER BY e.days_left ASC
         LIMIT 60
-      `).all(...expArgs) : [];
+      `).all(actor, ...expArgs) : [];
       const mergedItems = kind === "expiry" ? expItems : [...expItems, ...items];
-      const expOpenCnt = db.prepare("SELECT count(*) AS c FROM company_expiry_todo WHERE status='open'").get().c;
-      const expMineCnt = db.prepare("SELECT count(*) AS c FROM company_expiry_todo WHERE status='open' AND (assignee=? OR assignee IS NULL)").get(user.id).c;
+      const expOpenCnt = db.prepare(`SELECT count(*) AS c FROM company_expiry_todo e WHERE e.status='open' AND ${expiryReadScope("e")}`).get(actor).c;
+      const expMineCnt = db.prepare(`SELECT count(*) AS c FROM company_expiry_todo e WHERE e.status='open' AND (e.assignee=$lifecycleActor OR e.assignee IS NULL) AND ${expiryReadScope("e")}`).get(actor).c;
       const alertCounts = db.prepare(`SELECT count(*) AS open,
         count(CASE WHEN a.kind='amendment' THEN 1 END) AS amendment,
         count(CASE WHEN a.kind='deadline' THEN 1 END) AS deadline,

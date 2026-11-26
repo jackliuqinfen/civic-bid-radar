@@ -692,4 +692,31 @@ test("Civic Bid Radar backend integration suite", async (t) => {
     assert.equal((await api(update("amend:92001:92005"), { method: "POST", cookie: viewerCookie, body: { status: "dismissed", reason: "无权修改" } })).status, 404);
   });
 
+  await t.test("company expiry and payment actions enforce company grants and assignee ownership", async () => {
+    const db = store.db;
+    db.prepare("INSERT INTO company(id,name) VALUES('comp_finance_private','隔离财务公司')").run();
+    db.prepare("INSERT INTO grant_company VALUES(?,?,?,?,?,?)").run("emp_admin_1", "comp_finance_private", 1, 1, 1, 1);
+    db.prepare(`INSERT INTO company_expiry_todo(id,dedupe_key,company_id,target_type,target_id,target_name,tier,valid_until,days_left,assignee)
+      VALUES('exp_private','private-expiry','comp_finance_private','doc','fictional-doc','隔离证照','7d','2099-01-01',6,'emp_admin_1')`).run();
+    const viewer = issued.find(account => account.username === "testviewer");
+    const login = await api("/api/auth/sign-in/username", { method: "POST", body: { username: viewer.username, password: viewer.password } });
+    assert.equal(login.status,200);
+    const viewerCookie = extractCookie(login.headers.getSetCookie());
+    const post = (path, body, loginCookie = cookie) => api(path, {method:"POST", body, cookie:loginCookie});
+    const get = (path, loginCookie = cookie) => api(path, {cookie:loginCookie});
+    assert.ok((await (await get("/api/alerts?kind=expiry")).json()).items.some(item => item.id === "exp_private"));
+    assert.ok(!(await (await get("/api/alerts?kind=expiry",viewerCookie)).json()).items.some(item => item.id === "exp_private"));
+    assert.equal((await post("/api/alerts/exp_private/update",{status:"done"},viewerCookie)).status,404);
+    const payment = {noticeId:"92003",companyId:"comp_finance_private",amountYuan:25.80,assigneeId:"emp_admin_1"};
+    assert.equal((await post("/api/finance/pay-tasks",payment,viewerCookie)).status,403);
+    const task = await post("/api/finance/pay-tasks",payment);
+    assert.equal(task.status,200);
+    const {id} = await task.json();
+    const path = "/api/finance/pay-tasks/" + id + "/confirm";
+    assert.equal((await post(path,{},viewerCookie)).status,404);
+    assert.equal((await post(path,{})).status,200);
+    assert.equal((await post(path,{})).status,409);
+    assert.equal(db.prepare("SELECT count(*) AS c FROM finance_entry WHERE company_id='comp_finance_private' AND notice_id='92003'").get().c,1);
+  });
+
 });
