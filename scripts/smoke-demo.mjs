@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "civic-bid-radar-demo-"));
+const runDir = mkdtempSync(join(tmpdir(), "civic-bid-radar-demo-"));
+const dir = join(runDir, "original");
 const portProbe = createServer();
 portProbe.listen(0, "127.0.0.1");
 await once(portProbe, "listening");
@@ -56,12 +57,36 @@ try {
   await api("/opportunities/900001/follow", { decision: "declined", note: "Fictional demo" });
   assert.ok((await api("/alerts?status=dismissed")).items.some(item => item.kind === "amendment"));
   assert.ok(!(await api("/alerts")).items.some(item => item.kind === "amendment"));
-  console.log("Demo smoke passed: startup, authentication, company filtering, follow and archive.");
+  const backup = join(runDir,"workspace-backup.db");
+  execFileSync(process.execPath, ["runtime/selfhost/backup.mjs",dir,backup], { cwd:root, stdio:"pipe" });
+  const restore = join(runDir,"restored");
+  mkdirSync(restore,{mode:0o700});
+  copyFileSync(backup,join(restore,"workspace.db"));
+  const exited = once(app,"exit");
+  app.kill("SIGTERM");
+  await exited;
+  app = null;
+  const restored = execFileSync(process.execPath, ["--input-type=module","-e", [
+    'import { openStore } from "./runtime/selfhost/store.mjs";',
+    'const store = openStore(process.argv[1], "http://localhost");',
+    'const row = store.db.prepare("SELECT decision FROM project_follow WHERE notice_id=\'900001\'").get();',
+    'if (row?.decision !== "declined") process.exitCode = 1;',
+    'store.db.close();',
+  ].join("\n"),restore], { cwd:root, stdio:"pipe" });
+  assert.equal(restored.length,0);
+  const empty = join(runDir,"empty");
+  execFileSync(process.execPath, ["scripts/init-demo.mjs", empty, "--empty"], { cwd:root, stdio:"pipe" });
+  const emptyChecks = 'import { openStore } from "./runtime/selfhost/store.mjs";' +
+    'const store = openStore(process.argv[1],"http://localhost");' +
+    'process.exitCode = store.db.prepare("SELECT count(*) AS n FROM notice").get().n === 0 ? 0 : 1;' +
+    'store.db.close();';
+  execFileSync(process.execPath, ["--input-type=module","-e",emptyChecks,empty], { cwd:root, stdio:"pipe" });
+  console.log("Demo smoke passed: startup, authentication, filtering, follow, archive, backup and restore.");
 } finally {
   if (app && app.exitCode === null && app.signalCode === null) {
     const exited = once(app, "exit");
     app.kill("SIGTERM");
     await exited;
   }
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(runDir, { recursive: true, force: true });
 }

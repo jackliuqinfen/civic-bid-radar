@@ -111,7 +111,7 @@ export function describeCapabilities(caps) {
 export function matchNoticeToCapabilities(notice, caps) {
   const evidence = notice.evidence || extractNoticeEvidence(notice);
   const match = evaluateNoticeRequirements(evidence, caps?.documents || [], caps?.evaluatedOn, caps?.personnel || []);
-  if (match.outcome !== "conform" && match.outcome !== "partial_core_ok") return null;
+  if (match.outcome !== "conform") return null;
   const warnings = match.requirements
     .filter((r) => r.status === "pending" && r.reason !== "公告未写明")
     .map((r) => r.reason)

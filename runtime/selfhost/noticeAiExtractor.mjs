@@ -372,8 +372,8 @@ export function getCachedNoticeAiExtract(db, noticeId, expectedHash = "") {
 }
 
 /**
- * Structured zero-hallucination tender notice extraction via TokenHub AI.
- * Strictly anchors every clause with exact rawQuote from notice text.
+ * Advisory tender notice extraction via an OpenAI-compatible endpoint.
+ * The model output supplies reading suggestions and is separate from qualification rules.
  */
 export async function extractNoticeWithAi(db, { noticeId, title, body, attachmentTexts = "", aiConfig, force = false }) {
   ensureNoticeAiTables(db);
@@ -455,10 +455,10 @@ export async function extractNoticeWithAi(db, { noticeId, title, body, attachmen
     consortiumPolicy: ["not_allowed", "allowed", "required", "not_stated"].includes(parsed.consortiumPolicy) ? parsed.consortiumPolicy : "not_stated",
     smeOnly: Boolean(parsed.smeOnly),
     qualGroups: Array.isArray(parsed.qualGroups) ? parsed.qualGroups.slice(0, 6).map((g) => ({
-      logic: g?.logic === "AND" ? "AND" : "OR",
+      logic: ["AND","OR"].includes(g?.logic) ? g.logic : null,
       specs: Array.isArray(g?.specs) ? g.specs.slice(0, 8).map((sp) => ({
         name: String(sp?.name || sp || "").trim().slice(0, 80),
-        higherAccepted: sp?.higherAccepted !== false,
+        higherAccepted: sp?.higherAccepted === true,
       })).filter((sp) => sp.name) : [],
       rawQuote: String(g?.rawQuote || "").trim().slice(0, 160),
     })).filter((g) => g.specs.length) : [],
@@ -487,25 +487,6 @@ export async function extractNoticeWithAi(db, { noticeId, title, body, attachmen
       extracted_json=excluded.extracted_json,
       updated_at=CURRENT_TIMESTAMP
   `).run(noticeId, contentHash, modelName, JSON.stringify(sanitized));
-
-  // Backfill notice_meta empty fields deterministically from AI extract if currently missing
-  try {
-    const meta = db.prepare("SELECT budget_yuan, deposit_text, eval_method, qual_tags FROM notice_meta WHERE id=?").get(noticeId);
-    if (meta) {
-      const qualTagNames = [...new Set(sanitized.qualGroups.flatMap((g) => g.specs.map((s) => s.name)))].filter(Boolean);
-      const nextQual = (!meta.qual_tags || meta.qual_tags === "[]") && qualTagNames.length ? qualTagNames.join(",") : meta.qual_tags;
-      const nextBudget = (!meta.budget_yuan || Number(meta.budget_yuan) === 0) && sanitized.budgetYuan ? sanitized.budgetYuan : meta.budget_yuan;
-      const nextBudgetText = (!meta.budget_yuan || Number(meta.budget_yuan) === 0) && sanitized.budgetText ? sanitized.budgetText : null;
-      const nextDep = !meta.deposit_text && sanitized.depositText ? sanitized.depositText : meta.deposit_text;
-      const nextEval = !meta.eval_method && sanitized.evalMethod ? sanitized.evalMethod : meta.eval_method;
-      db.prepare(`
-        UPDATE notice_meta SET
-          qual_tags=?, budget_yuan=?, budget_text=COALESCE(?, budget_text),
-          deposit_text=?, eval_method=?
-        WHERE id=?
-      `).run(nextQual, nextBudget, nextBudgetText, nextDep, nextEval, noticeId);
-    }
-  } catch {}
 
   return { ok: true, cached: false, extract: { ...sanitized, _model: modelName, _hash: contentHash } };
 }
